@@ -1,8 +1,10 @@
 package toxiproxy
 
 import (
+	"crypto/tls"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/Shopify/toxiproxy/v2/stream"
@@ -91,7 +93,18 @@ func (proxy *Proxy) Stop() {
 
 func (proxy *Proxy) listen() error {
 	var err error
-	proxy.listener, err = net.Listen("tcp", proxy.Listen)
+	if strings.HasSuffix(proxy.Upstream, ":443") {
+		var cer tls.Certificate
+		cer, err = tls.LoadX509KeyPair("server.pem", "server.key")
+		if err != nil {
+			proxy.started <- err
+			return err
+		}
+		conf := &tls.Config{Certificates: []tls.Certificate{cer}}
+		proxy.listener, err = tls.Listen("tcp", proxy.Listen, conf)
+	} else {
+		proxy.listener, err = net.Listen("tcp", proxy.Listen)
+	}
 	if err != nil {
 		proxy.started <- err
 		return err
@@ -177,7 +190,12 @@ func (proxy *Proxy) server() {
 			"upstream": proxy.Upstream,
 		}).Info("Accepted client")
 
-		upstream, err := net.Dial("tcp", proxy.Upstream)
+		var upstream net.Conn
+		if strings.HasSuffix(proxy.Upstream, ":443") {
+			upstream, err = tls.Dial("tcp", proxy.Upstream, nil)
+		} else {
+			upstream, err = net.Dial("tcp", proxy.Upstream)
+		}
 		if err != nil {
 			logrus.WithFields(logrus.Fields{
 				"name":     proxy.Name,
